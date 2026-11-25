@@ -1,5 +1,7 @@
 name: Deploy site to GitHub Pages
 
+# Publishes web/ (and admin/ at /admin/) to the gh-pages branch, which GitHub Pages serves at
+# https://tradex007.github.io/Tradecognix/
 on:
   push:
     branches: [main]
@@ -7,18 +9,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  # Build and deploy are separate jobs: deploy-pages looks the artifact up by name, and doing that in the
-  # same job right after upload sometimes found nothing ("No artifacts named github-pages").
-  build:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,17 +27,12 @@ jobs:
           cp -r admin/. _site/admin/
           rm -f _site/netlify.toml _site/vercel.json
           touch _site/.nojekyll
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Push to gh-pages
+        run: |
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Deploy ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
