@@ -25,7 +25,7 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://artha00777.github.io
+        value: https://tradex007.github.io
       - key: ADMIN_EMAILS
         value: contact@devcognix.com
       - key: RAZORPAY_KEY_ID

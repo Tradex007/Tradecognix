@@ -2,7 +2,7 @@
 
 **Plain-English algorithmic trading for Indian brokers.** Describe a strategy the way you would say it out loud ("Buy Nifty ATM call when 9 EMA crosses above 21 EMA on 15-min candles after 9:30 AM, exit on opposite cross or 3:15 PM, max 2 trades a day"). TradeCognix turns it into structured rules, backtests it with real Indian costs, paper-trades it, and only then, with explicit server-side and in-app confirmation, places orders through **your own** broker account.
 
-**Live site:** https://artha00777.github.io/tradecognix/ (demo mode, runs in the browser) · admin console at [/admin/](https://artha00777.github.io/tradecognix/admin/)
+**Live site:** https://tradex007.github.io/Tradecognix/ (demo mode, runs in the browser) · admin console at [/admin/](https://tradex007.github.io/Tradecognix/admin/)
 
 > © 2026 DevCognix. Proprietary, see [LICENSE](LICENSE). Contact: contact@devcognix.com · +91 901 908 8160
 
