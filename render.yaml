@@ -1,0 +1,36 @@
+# Render free tier: PAPER TRADING / DEMO ONLY.
+# Render's free web services sleep when idle and have no static outbound IP, so they cannot
+# satisfy broker static-IP whitelisting for live orders. Use the Oracle Cloud VM path for live.
+services:
+  - type: web
+    name: tradecognix-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: TRUST_PROXY_HEADERS
+        value: "true"   # Render terminates TLS in front of the app
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+      - key: BETA_PLAN
+        value: "pro"
+      - key: DATABASE_URL
+        sync: false   # Supabase Postgres connection string
+      - key: FERNET_KEY
+        generateValue: true   # any 32+ char secret works; the app derives a Fernet key from it
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://artha00777.github.io
+      - key: ADMIN_EMAILS
+        value: contact@devcognix.com
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
