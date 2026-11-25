@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Optional
 
@@ -12,10 +13,11 @@ from ..config import get_settings
 from ..db import get_session
 from ..models import BacktestRun, JournalEntry, LiveSession, OrderLog, StrategyRecord, User, as_utc, utcnow
 from ..ratelimit import client_ip, enforce
+from ..strategy.copilot import MAX_INSTRUCTION_CHARS, copilot_edit
 from ..strategy.dsl import Strategy, strategy_json_schema
 from ..strategy.explain import explain, rules_table
 from ..strategy.parser import parse_strategy
-from .deps import current_user, optional_user
+from .deps import DbId, current_user, optional_user
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
@@ -29,6 +31,12 @@ class StrategyIn(BaseModel):
     name: Optional[str] = Field(None, max_length=120)
     prompt: str = Field("", max_length=4000)
     spec: Optional[dict[str, Any]] = None
+
+
+class CopilotIn(BaseModel):
+    spec: dict[str, Any]
+    instruction: str = ""  # length is checked by hand: the contract wants 400, not 422, for empty/long text
+    use_llm: bool = True
 
 
 class ConfirmLiveIn(BaseModel):
@@ -55,7 +63,9 @@ def validate_spec(spec: dict) -> Strategy:
     try:
         return Strategy.model_validate(spec)
     except ValidationError as e:
-        raise HTTPException(422, {"message": "Invalid strategy", "errors": e.errors(include_url=False)})
+        # e.errors() can carry the raw ValueError in "ctx", which is not JSON-serialisable (was a 500);
+        # e.json() renders every error safely.
+        raise HTTPException(422, {"message": "Invalid strategy", "errors": json.loads(e.json(include_url=False))})
 
 
 @router.get("/schema")
@@ -78,6 +88,23 @@ def parse(body: ParseIn, request: Request, user: Optional[User] = Depends(option
     except ValueError as e:
         raise HTTPException(422, str(e))
     return {**res.to_dict(), "explanation": explain(res.strategy), "rules": rules_table(res.strategy)}
+
+
+@router.post("/copilot")
+def copilot(body: CopilotIn, request: Request, user: Optional[User] = Depends(optional_user)):
+    """Edit a strategy with a plain-English instruction ("exit 15 min earlier"). Public, like /parse.
+
+    422 for an invalid spec, 400 for an empty or over-long instruction. An instruction that is not
+    understood returns 200 with understood=false and the spec unchanged.
+    """
+    limit_anonymous(request, user, "parse")
+    instruction = (body.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(400, "Instruction is empty")
+    if len(instruction) > MAX_INSTRUCTION_CHARS:
+        raise HTTPException(400, f"Instruction is too long (max {MAX_INSTRUCTION_CHARS} characters)")
+    s = validate_spec(body.spec)
+    return copilot_edit(s, instruction, use_llm=body.use_llm).to_dict()
 
 
 @router.post("/explain")
@@ -124,12 +151,12 @@ def _get(db: Session, user: User, sid: int, write: bool = False) -> StrategyReco
 
 
 @router.get("/{sid}")
-def get_one(sid: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def get_one(sid: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     return out(_get(db, user, sid))
 
 
 @router.put("/{sid}")
-def update(sid: int, body: StrategyIn, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def update(sid: DbId, body: StrategyIn, user: User = Depends(current_user), db: Session = Depends(get_session)):
     rec = _get(db, user, sid, write=True)
     if body.spec is not None:
         s = validate_spec(body.spec)
@@ -148,7 +175,7 @@ def update(sid: int, body: StrategyIn, user: User = Depends(current_user), db: S
 
 
 @router.delete("/{sid}")
-def delete(sid: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def delete(sid: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     rec = _get(db, user, sid, write=True)
     if db.exec(select(LiveSession).where(LiveSession.strategy_id == rec.id, LiveSession.status == "running")).first():
         raise HTTPException(409, "Stop the running session for this strategy before deleting it")
@@ -174,7 +201,7 @@ def delete(sid: int, user: User = Depends(current_user), db: Session = Depends(g
 
 
 @router.post("/{sid}/confirm-live")
-def confirm_live(sid: int, body: ConfirmLiveIn, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def confirm_live(sid: DbId, body: ConfirmLiveIn, user: User = Depends(current_user), db: Session = Depends(get_session)):
     rec = _get(db, user, sid, write=True)  # only the owner can consent to real-money trading
     if body.confirm_text.strip() != "LIVE" or not body.acknowledge_risk:
         raise HTTPException(400, "Type LIVE and acknowledge the risk to enable live trading for this strategy")
@@ -186,7 +213,7 @@ def confirm_live(sid: int, body: ConfirmLiveIn, user: User = Depends(current_use
 
 
 @router.post("/{sid}/revoke-live")
-def revoke_live(sid: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def revoke_live(sid: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     rec = _get(db, user, sid)  # admins may revoke (safety), never confirm
     rec.live_confirmed = False
     rec.updated_at = utcnow()

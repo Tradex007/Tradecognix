@@ -67,3 +67,13 @@ Scope: the full repo as of `f658dc0` (indicators, strategy DSL and parser, backt
 - The GitHub Pages site runs in demo mode, so waitlist emails entered there are not collected anywhere until `TC_API_BASE` points at a deployed backend.
 - Plan limits stay enforced while payments are off, so "free during beta" Pro/Elite access currently means an admin grant (`PATCH /api/admin/users/{id}`).
 - Rate limits are per process and in memory (fine for the single-worker deployment, not for horizontal scaling).
+
+## Round 2 (25 Nov 2026)
+
+**Tests: 204 passing** (116 baseline + 88 new: `test_round2_*`).
+
+- Strategy Copilot (`POST /api/strategies/copilot`), regime breakdown and whipsaw autopsy in backtest results, ADX indicator, points-based stops/targets.
+- Market-order price protection (`MARKET_PROTECTION_PCT`, protected LIMIT orders; kill switch still uses MARKET). Shared per-broker token-bucket rate limiter with 429 backoff (`brokers/throttle.py`).
+- Fixes: invalid-spec 422s no longer 500; out-of-range ids return 422; seed bounded; empty `DATABASE_URL` falls back to SQLite; futures sessions refused with 400 until routing exists.
+- Web: WebSocket auth via `tc-auth` subprotocol (no token in URL); demo Save, sweep, journal, paper persistence, copilot panel, regime/autopsy cards, parser upgrades incl. Hinglish; 404/robots path fixes; admin demo fixes.
+- Remaining: per-process rate limiter, no partial-fill handling for protected LIMIT orders, API mode not yet run against a hosted backend.

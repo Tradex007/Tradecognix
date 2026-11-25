@@ -121,8 +121,9 @@ docker compose up -d --build
 ## How a strategy runs
 
 1. **Parse** `POST /api/strategies/parse`: plain English → `Strategy` JSON + a plain-English explanation for confirmation. The rule-based parser handles EMA/SMA crossovers (incl. `9/21 EMA`), RSI levels, VWAP pullbacks, Supertrend flips, opening-range breakouts, fixed-time entries (straddles/strangles), NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY/SENSEX and NSE equities, call/put/buy/sell → option mode (ATM/ITM/OTM buy, ATM sell = "sell the opposite option", straddle/strangle), times like `9:30` / `3:15 pm`, lots, SL/target/trailing %, max trades/day and daily loss caps. With `GEMINI_API_KEY` (or `OPENAI_BASE_URL`) set, an LLM produces the JSON first, it is validated against the schema, and any failure falls back to the rule parser.
-2. **Backtest** `POST /api/backtests/run`: signals on bar close, fills at close ± slippage, intrabar SL/target from the underlying's high/low, entry window and hard exit enforced, intraday square-off. Costs per order leg: brokerage (₹20 flat, configurable), STT, exchange transaction charges + IPFT, SEBI fee, stamp duty, 18% GST, plus slippage as a separate line. Metrics: trades, win rate, gross/net P&L, profit factor, payoff, expectancy, max drawdown, consecutive losses, Sharpe (daily), exit-reason mix and **whipsaws** (losing trades closed by a signal within N bars). `POST /api/backtests/sweep` runs the timeframe × mode × entry-time grid.
-3. **Paper** `POST /api/engine/start {mode:"paper"}`: same runner, PaperBroker fills at LTP with slippage. With a connected broker it uses live market data; without one, a synthetic feed.
+1b. **Copilot** `POST /api/strategies/copilot` `{spec, instruction}`: edit a strategy in plain English ("exit 15 min earlier", "add a 1% stop loss and a 2% target", "use 20 and 50 EMA", "RSI 25/75", "max 2 trades a day", "switch to BankNifty options", "2 strikes OTM", "add ADX filter > 25"). Rule-based and deterministic (`app/strategy/copilot.py`); returns the updated spec, one human-readable line per change, the new explanation and `understood`. Instructions it cannot parse leave the spec unchanged (`understood: false`, with example instructions); the LLM, when configured, is only tried for those. 422 on an invalid spec, 400 on an empty or >500-character instruction. Same anonymous rate limit as `/parse`.
+2. **Backtest** `POST /api/backtests/run`: signals on bar close, fills at close ± slippage, intrabar SL/target from the underlying's high/low, entry window and hard exit enforced, intraday square-off. Costs per order leg: brokerage (₹20 flat, configurable), STT, exchange transaction charges + IPFT, SEBI fee, stamp duty, 18% GST, plus slippage as a separate line. Metrics: trades, win rate, gross/net P&L, profit factor, payoff, expectancy, max drawdown, consecutive losses, Sharpe (daily), exit-reason mix and **whipsaws** (losing trades closed by a signal within N bars). Every result also carries `regimes` (P&L, trades and win rate on trending / range / volatile session days: volatile = day range ÷ prior daily ATR in the top 20% of the sample, else trending if ADX(14) at the session close ≥ 25, else range) and an `autopsy` (whipsaw count and loss, what a 3-bar cooldown after a loss or an ADX(14) ≥ 20 entry filter would have changed, worst/best entry hour, and up to three suggestions, biggest first). `POST /api/backtests/sweep` runs the timeframe × mode × entry-time grid.
+3. **Paper** `POST /api/engine/start {mode:"paper"}`: same runner, PaperBroker fills at LTP with slippage. Engine orders are **price-protected**: instead of a bare MARKET order the runner sends a LIMIT at LTP ± `MARKET_PROTECTION_PCT` (default 1%, rounded to the tick, buys capped above LTP, sells floored below). An entry that does not fill inside the band is cancelled and skipped (never chased); an exit that does not fill is retried once as MARKET so a position is never left open. Broker market-data calls (candles, LTP) share one token bucket per broker with exponential backoff on HTTP 429 / "rate limit" errors. With a connected broker it uses live market data; without one, a synthetic feed.
 4. **Live** `POST /api/engine/start {mode:"live", confirm_text:"LIVE"}` succeeds only if **all** hold: `LIVE_TRADING_ENABLED=true` on the server, the strategy was confirmed for live (`POST /api/strategies/{id}/confirm-live`, revoked automatically when its rules change), the user typed `LIVE`, and a real, implemented broker account is connected. The engine re-checks the server flag on every tick and halts live sessions if it is turned off.
 
 Guardrails on every session: max trades/day, daily loss cap (stops entries and squares off), hard exit time, per-user kill switch (`POST /api/engine/kill`) and platform kill switch (`POST /api/admin/kill-all`). Every order carries the strategy's tag (e.g. `TC12NE9E21C`), and every closed trade lands in the journal tagged by strategy.
@@ -141,7 +142,7 @@ Interactive docs at `/docs`. Main routes:
 |---|---|
 | Auth | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/token` (OAuth2 form), `GET /api/auth/me` |
 | Brokers | `GET /api/brokers`, `GET /api/brokers/static-ip`, `GET/POST /api/brokers/accounts`, `POST /api/brokers/accounts/{id}/test`, `GET …/{id}/funds`, `GET …/{id}/credentials` (masked), `DELETE …/{id}` |
-| Strategies | `POST /api/strategies/parse` (public), `POST /api/strategies/explain`, `GET /api/strategies/schema`, CRUD on `/api/strategies`, `POST /api/strategies/{id}/confirm-live`, `…/revoke-live` |
+| Strategies | `POST /api/strategies/parse` (public), `POST /api/strategies/copilot` (public), `POST /api/strategies/explain`, `GET /api/strategies/schema`, CRUD on `/api/strategies`, `POST /api/strategies/{id}/confirm-live`, `…/revoke-live` |
 | Backtests | `POST /api/backtests/run` (public on synthetic data), `POST /api/backtests/sweep`, `GET /api/backtests`, `GET /api/backtests/{id}`, `GET /api/backtests/{id}/trades` |
 | Paper / live | `POST /api/engine/start`, `POST /api/engine/{sid}/stop`, `POST /api/engine/kill`, `GET /api/engine/status`, `GET /api/engine/sessions`, `GET /api/engine/orders`, `POST /api/engine/tick` (admin: force a tick, optionally at a simulated time) |
 | Journal | `GET /api/journal`, `GET /api/journal/summary`, `PATCH /api/journal/{id}`, `GET /api/journal/export.csv` |
@@ -165,6 +166,17 @@ Limits are enforced server-side in `backend/app/billing/plans.py` (the single so
 The Razorpay billing code is kept but dormant: `POST /api/billing/checkout` returns an order, Razorpay Checkout runs on the client, then `POST /api/billing/verify` checks the signature and activates the plan (the webhook activates it too). It answers 503 until `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` are set, and nothing in `web/` calls it. To turn payments on later, set the keys and wire the Pro/Elite buttons back to checkout.
 
 ## Deploying for free
+
+### One-click backend on Render (paper / demo)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Tradex007/Tradecognix)
+
+The button reads `render.yaml`: a Docker web service built from `backend/Dockerfile`, health-checked on `/health`, with `ENVIRONMENT=production`, `LIVE_TRADING_ENABLED=false`, generated `JWT_SECRET` / `FERNET_KEY`, and `CORS_ORIGINS=https://tradex007.github.io`. Render asks for the values marked `sync: false`:
+
+- `DATABASE_URL`: your Supabase Postgres connection string. Leave it blank only for a throwaway demo: the app then falls back to SQLite inside the container, which is wiped on every redeploy and free-tier spin-down.
+- `RAZORPAY_*`: leave blank during the beta (billing answers 503 until they are set).
+
+After the first deploy, open `https://<your-service>.onrender.com/health` (should return `{"ok": true, ...}`), then point the web app at it by setting `TC_API_BASE` in `web/js/config.js`. If the site is served from another origin, add it to `CORS_ORIGINS` (comma-separated). Free Render services sleep when idle (first request takes ~30-60 s) and have no static egress IP, so keep live trading off there.
 
 | Piece | Free option | Notes |
 |---|---|---|
@@ -201,14 +213,14 @@ Trading in equities, futures and options involves substantial risk of loss and i
 | Angel One SmartAPI adapter | Fully implemented against `smartapi-python` + `pyotp` (login, profile, funds, candles with chunking, LTP, place/cancel order with `ordertag`, positions, order book, scrip-master instrument search and option resolution). Not exercised against a live account in CI. |
 | Zerodha, Upstox, Dhan, Fyers adapters | Best-effort real implementations from the public SDKs/APIs; need verification with real accounts. Zerodha/Upstox/Fyers logins are OAuth redirects (paste request/auth code or a day's access token). |
 | Groww, ICICI Direct (Breeze), Kotak Neo, 5paisa, Alice Blue, Shoonya | Documented skeletons: credential fields + implementation notes; every method raises `NotImplementedError`. |
-| Live futures routing | Not yet: live/paper sessions support options and equity; futures backtest at spot (flagged). |
+| Live futures routing | Not yet: live/paper sessions support options and equity (starting a futures session is refused with a 400); futures backtest at spot (flagged). |
 | Historical option premiums | Not yet: Black-Scholes proxy (flagged). |
 | Mobile app | Plan only (`mobile/README.md`). |
 
 ## Development
 
 ```bash
-cd backend && python -m pytest          # 111 tests: parser, indicators, costs, backtest, engine, brokers, security, billing, waitlist, API
+cd backend && pip install -r requirements-dev.txt && python -m pytest   # 204 tests: parser, copilot, indicators, regimes/autopsy, costs, backtest, engine, brokers, security, billing, waitlist, API fuzz, deploy
 ```
 
 CI (`.github/workflows/ci.yml`) runs the tests and a CLI smoke backtest on every push. `.github/workflows/pages.yml` deploys `web/` to the GitHub Pages root and `admin/` to `/admin/`. See [`docs/AUDIT.md`](docs/AUDIT.md) for what the Nov 2026 audit fixed and what is still open.

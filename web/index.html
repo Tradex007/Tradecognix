@@ -609,10 +609,40 @@
                     <div class="studio__actions">
                       <button class="btn btn--primary" type="button" id="x-run">Run backtest <kbd class="kbd-mod">Ctrl ↵</kbd></button>
                       <button class="btn btn--secondary btn--sm" type="button" id="x-save" hidden>Save strategy</button>
-                      <span class="note">Practice prices · last 120 days</span>
+                      <span class="note" id="x-run-note">Practice prices · last 120 days</span>
                     </div>
                     <div class="progress" id="x-run-prog"><i></i></div>
                     <p class="steplog" id="x-run-log" aria-live="polite"></p>
+                  </div>
+                </div>
+
+                <div class="panel cop" id="x-cop" hidden aria-labelledby="x-cop-title">
+                  <div class="panel__head"><h3 id="x-cop-title"><svg class="cop__icon" aria-hidden="true"><use href="#n-studio" /></svg>Strategy Copilot</h3><span class="note">Change the rules in plain words</span></div>
+                  <div class="panel__body">
+                    <form class="cop__form" id="x-cop-form" novalidate>
+                      <label class="label" for="x-cop-input">Tell the copilot what to change</label>
+                      <div class="cop__row">
+                        <input class="input" id="x-cop-input" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="e.g. exit 15 min earlier and add a 1% stop loss" aria-describedby="x-cop-hint" />
+                        <button class="btn btn--primary btn--sm" type="submit" id="x-cop-go">Apply</button>
+                      </div>
+                      <p class="hint" id="x-cop-hint">Exit times, stops, targets, trades a day, timeframe, entry window, EMA/RSI levels, instrument, ADX filter.</p>
+                    </form>
+                    <div class="chips cop__chips" role="group" aria-label="Quick changes">
+                      <button class="chip" type="button" data-cop="Exit 15 min earlier">Exit 15 min earlier</button>
+                      <button class="chip" type="button" data-cop="Add 1% stop loss">Add 1% stop loss</button>
+                      <button class="chip" type="button" data-cop="Max 1 trade a day">Max 1 trade a day</button>
+                      <button class="chip" type="button" data-cop="Switch to 5 min">Switch to 5 min</button>
+                    </div>
+                    <div class="cop__out" id="x-cop-out" hidden>
+                      <p class="cop__msg" id="x-cop-msg" role="status" aria-live="polite"></p>
+                      <ul class="cop__changes" id="x-cop-changes"></ul>
+                      <p class="explain cop__explain" id="x-cop-explain" hidden></p>
+                      <div class="studio__actions cop__actions" id="x-cop-actions" hidden>
+                        <button class="btn btn--primary btn--sm" type="button" id="x-cop-run">Re-run backtest</button>
+                        <button class="btn btn--ghost btn--sm" type="button" id="x-cop-undo">Undo changes</button>
+                      </div>
+                      <div class="cmp" id="x-cop-cmp" hidden></div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -624,6 +654,7 @@
                     <span class="res-scope" id="x-res-scope"></span>
                   </div>
                   <div class="callout callout--warn res-note" id="x-res-note" role="note" hidden><svg aria-hidden="true"><use href="#ic-shield" /></svg><p></p></div>
+                  <div class="cmp cmp--res" id="x-res-cmp" role="status" hidden></div>
                   <div class="metrics" id="x-mgrid"></div>
                   <div class="res-grid">
                     <div>
@@ -635,6 +666,21 @@
                       <div class="costbars" id="x-costbars"></div>
                       <div class="costsum" id="x-costsum"></div>
                     </div>
+                  </div>
+                  <div class="insights" id="x-insights" hidden>
+                    <section class="insight" id="x-regimes" aria-labelledby="x-reg-title" hidden>
+                      <p class="cap" id="x-reg-title">Market regimes<small id="x-reg-sub">How the rules did on trending, range-bound and volatile days</small></p>
+                      <div class="regbar" id="x-regbar" aria-hidden="true"></div>
+                      <div class="scroll-x"><table class="tbl tbl--tight">
+                        <thead><tr><th scope="col">Regime</th><th scope="col" class="r col-days">Days</th><th scope="col" class="r">Trades</th><th scope="col" class="r">Win rate</th><th scope="col" class="r">Net P&amp;L</th></tr></thead>
+                        <tbody id="x-reg-body"></tbody>
+                      </table></div>
+                    </section>
+                    <section class="insight" id="x-autopsy" aria-labelledby="x-aut-title" hidden>
+                      <p class="cap" id="x-aut-title">What would have helped<small>Re-scored on the same trades. A guide, not a promise.</small></p>
+                      <dl class="aut__facts" id="x-aut-facts"></dl>
+                      <ul class="aut__list" id="x-aut-list"></ul>
+                    </section>
                   </div>
                   <div class="panel__head" style="border-top:1px solid var(--border)"><h3>Recent trades</h3><span class="note" id="x-trades-note">Latest 8</span></div>
                   <div class="scroll-x">
@@ -739,6 +785,19 @@
                 <div class="seg" role="group" aria-label="Theme"><button type="button" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" data-theme-set="light" aria-pressed="false">Light</button></div></div>
               <div class="set-row"><div><h3>Account</h3><p id="x-acct-text">Not signed in. Backtests work without an account.</p></div><button class="btn btn--secondary btn--sm" type="button" id="x-acct-btn" data-auth-open>Create free account</button></div>
               <div class="set-row"><div><h3>Backend</h3><p id="x-api-text">Demo mode: everything runs in your browser.</p></div><span class="badge" id="x-api-badge">Demo</span></div>
+              <div class="set-row set-api" id="x-api-connect" hidden>
+                <div class="set-api__copy">
+                  <h3>Connect your backend</h3>
+                  <p>This site is running in demo mode. Deploy the TradeCognix API, then open the site with <code>?api=https://your-api</code>. The address is remembered on this device; <code>?api=off</code> switches back to the demo. To make it permanent for everyone, set <code>TC_API_BASE</code> in <code>js/config.js</code>.</p>
+                  <a class="set-api__link" href="https://github.com/Tradex007/Tradecognix#deploying-for-free" target="_blank" rel="noopener">Deployment guide in the README<svg aria-hidden="true"><use href="#i-arrow" /></svg></a>
+                </div>
+                <form class="set-api__form" id="x-api-form" novalidate>
+                  <label class="sr-only" for="x-api-url">Backend URL</label>
+                  <input class="input" id="x-api-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://your-api.example.com" aria-describedby="x-api-err" />
+                  <button class="btn btn--secondary btn--sm" type="submit">Connect</button>
+                  <p class="hint is-error" id="x-api-err" aria-live="polite"></p>
+                </form>
+              </div>
               <div class="set-row"><div><h3>More</h3><p>Every screen in the workspace.</p></div><div class="btns"><button class="btn btn--secondary btn--sm" type="button" data-view="backtests">Backtests</button><button class="btn btn--secondary btn--sm" type="button" data-view="journal">Journal</button><a class="btn btn--ghost btn--sm" href="#top" data-back>Back to site</a></div></div>
               <div class="set-row"><div><h3>Reset demo</h3><p>Clear demo sign-in, broker connections, sessions and backtests on this device.</p></div><button class="btn btn--danger-outline btn--sm" type="button" id="x-reset">Reset demo data</button></div>
             </div>

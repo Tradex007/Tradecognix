@@ -13,7 +13,16 @@ _engine = None
 log = logging.getLogger("tradecognix.db")
 
 
+DEFAULT_SQLITE_URL = "sqlite:///./tradecognix.db"
+
+
 def _normalise_url(url: str) -> str:
+    # An empty DATABASE_URL (e.g. a Render blueprint "sync: false" value left blank) used to crash
+    # start-up inside create_engine(""); fall back to the local SQLite file instead.
+    url = (url or "").strip()
+    if not url:
+        log.warning("DATABASE_URL is empty; using %s (data is lost when the container is replaced)", DEFAULT_SQLITE_URL)
+        return DEFAULT_SQLITE_URL
     # Supabase / Heroku style URLs -> SQLAlchemy psycopg3 driver
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]

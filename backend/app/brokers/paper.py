@@ -105,6 +105,19 @@ class PaperBroker(BrokerAdapter):
             side = "buy" if req.side == "BUY" else "sell"
             segment = "options" if req.instrument.option_type else ("futures" if "FUT" in req.instrument.instrument_type else "equity_intraday")
             fill = apply_slippage(ref, side, self.cost_cfg.slippage_for(segment), req.instrument.tick_size or 0.05)
+            if req.order_type == "LIMIT":
+                # Paper LIMIT orders are immediate-or-cancel: they trade only if the market is inside the
+                # limit, and never at a worse price than the limit (price protection).
+                if req.price <= 0:
+                    return OrderResult(order_id="", status="rejected", message="LIMIT order needs a positive price")
+                if (side == "buy" and ref > req.price) or (side == "sell" and ref < req.price):
+                    oid = f"PAPER{next(self._ids):06d}"
+                    self._orders.append({"order_id": oid, "symbol": req.instrument.symbol, "side": req.side, "qty": req.quantity, "status": "cancelled",
+                                         "avg_price": 0.0, "ref_price": ref, "limit": req.price, "costs": 0.0, "tag": req.tag,
+                                         "time": ist_now().isoformat(timespec="seconds")})
+                    return OrderResult(order_id=oid, status="cancelled", message=f"LIMIT {req.price} not marketable at {ref}",
+                                       raw={"ref_price": ref, "limit": req.price})
+                fill = min(fill, req.price) if side == "buy" else max(fill, req.price)
             exch = "BSE" if req.instrument.exchange in ("BSE", "BFO") else "NSE"
             costs = order_costs(side, fill, req.quantity, segment, exch, ist_today(), self.cost_cfg).total
             key = req.instrument.symbol

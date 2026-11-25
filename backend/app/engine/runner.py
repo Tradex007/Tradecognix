@@ -14,7 +14,7 @@ import pandas as pd
 
 from ..backtest import options as opt
 from ..backtest.costs import order_costs, segment_for
-from ..brokers.base import BrokerAdapter, Instrument, OrderRequest, OrderResult, normalize_status
+from ..brokers.base import BrokerAdapter, Instrument, OrderRequest, OrderResult, normalize_status, protected_limit_price
 from ..data.candles import TF_MINUTES
 from ..strategy.dsl import Strategy
 from ..strategy.evaluate import bar_close_datetimes, build_signals
@@ -43,7 +43,8 @@ def _inst_from_dict(d: dict) -> Instrument:
 
 class StrategyRunner:
     def __init__(self, strategy: Strategy, broker: BrokerAdapter, tag: str, mode: str = "paper",
-                 state: Optional[dict] = None, on_order: EventCb | None = None, on_trade: EventCb | None = None, on_event: EventCb | None = None):
+                 state: Optional[dict] = None, on_order: EventCb | None = None, on_trade: EventCb | None = None, on_event: EventCb | None = None,
+                 market_protection_pct: Optional[float] = None):
         self.s = strategy
         self.broker = broker
         self.tag = tag
@@ -67,6 +68,11 @@ class StrategyRunner:
         self.sleep = _time.sleep  # injectable for tests
         self.confirm_attempts = 4
         self.confirm_delay = 0.5
+        if market_protection_pct is None:
+            from ..config import get_settings
+
+            market_protection_pct = get_settings().market_protection_pct
+        self.protection_pct = max(0.0, float(market_protection_pct or 0.0))
 
     # ---------- helpers ----------
     def _log(self, kind: str, msg: str, now: datetime, **extra) -> None:
@@ -114,10 +120,67 @@ class StrategyRunner:
                 return OrderResult(res.order_id, o["status"], o.get("message") or res.message, o.get("avg_price") or res.avg_price, res.raw)
         return res
 
-    def _order(self, inst: Instrument, side: str, qty: int, now: datetime, reason: str) -> dict:
-        """Place one order. Raises OrderFailed when it is rejected/cancelled or its outcome is unknown."""
+    def _build_request(self, inst: Instrument, side: str, qty: int, reason: str, now: datetime) -> OrderRequest:
+        """MARKET order turned into a price-protected LIMIT (LTP +/- protection %, rounded to tick).
+
+        Without an LTP an entry is refused (never trade blind); an exit falls back to MARKET so a
+        position is never left open for want of a quote (brokers add their own market protection
+        where supported, e.g. Kite's market_protection).
+        """
+        req = OrderRequest(inst, "BUY" if side == "buy" else "SELL", qty, tag=self.tag)
+        if self.protection_pct <= 0:
+            return req
         try:
-            res = self.broker.place_order(OrderRequest(inst, "BUY" if side == "buy" else "SELL", qty, tag=self.tag))
+            ltp = float(self.broker.ltp(inst))
+            req.price = protected_limit_price(ltp, req.side, self.protection_pct, inst.tick_size or 0.05)
+            req.order_type = "LIMIT"
+        except Exception as e:
+            if reason == "entry":
+                raise OrderFailed(f"entry for {inst.symbol} skipped: no LTP for price protection ({type(e).__name__})") from e
+            self._log("warn", f"no LTP for {inst.symbol}; {reason} sent as MARKET without a price band", now)
+        return req
+
+    def _settle_unfilled_limit(self, res: OrderResult) -> OrderResult:
+        """A protected LIMIT still open after confirmation: cancel it so it cannot fill later at a
+        stale price, then read its final state (it may have filled in the meantime)."""
+        try:
+            self.broker.cancel_order(res.order_id)
+        except Exception:
+            pass
+        try:
+            o = self.broker.fetch_order(res.order_id)
+        except Exception:
+            o = None
+        if o and o["status"] != "pending":
+            return OrderResult(res.order_id, o["status"], o.get("message") or "price-protection LIMIT not filled; cancelled", o.get("avg_price") or 0.0, res.raw)
+        self.state["needs_reconcile"] = True
+        return OrderResult(res.order_id, "unknown", "price-protection LIMIT did not fill and its cancel is unconfirmed; reconcile with the broker", 0.0, res.raw)
+
+    def _order(self, inst: Instrument, side: str, qty: int, now: datetime, reason: str) -> dict:
+        """Place one order. Raises OrderFailed when it is rejected/cancelled or its outcome is unknown.
+
+        Orders are price-protected LIMITs (see _build_request). An entry LIMIT that does not fill
+        is cancelled and the entry abandoned (never chased). An exit LIMIT that does not fill is
+        retried once as a MARKET order, because leaving a position open is the bigger risk.
+        """
+        try:
+            req = self._build_request(inst, side, qty, reason, now)
+        except OrderFailed as e:
+            self.on_order({"time": now.isoformat(timespec="seconds"), "symbol": inst.symbol, "side": side.upper(), "qty": qty, "price": 0.0,
+                           "order_id": "", "status": "error", "message": str(e)[:300], "tag": self.tag, "reason": reason, "mode": self.mode})
+            raise
+        ev = self._send(req, inst, side, qty, now, reason)
+        if ev.get("_unfilled_limit") and reason != "entry" and not self.state.get("needs_reconcile"):
+            self._log("warn", f"{reason} LIMIT for {inst.symbol} not filled inside the {self.protection_pct:g}% band; retrying as MARKET", now)
+            ev = self._send(OrderRequest(inst, req.side, qty, tag=self.tag), inst, side, qty, now, reason)
+        if ev.get("_unfilled_limit"):
+            raise OrderFailed(f"{reason} order for {inst.symbol} not filled within the {self.protection_pct:g}% price band: {ev['message']}".strip())
+        ev.pop("_unfilled_limit", None)
+        return ev
+
+    def _send(self, req: OrderRequest, inst: Instrument, side: str, qty: int, now: datetime, reason: str) -> dict:
+        try:
+            res = self.broker.place_order(req)
         except Exception as e:
             ev = {"time": now.isoformat(timespec="seconds"), "symbol": inst.symbol, "side": side.upper(), "qty": qty, "price": 0.0,
                   "order_id": "", "status": "error", "message": f"{type(e).__name__}: {e}"[:300], "tag": self.tag, "reason": reason, "mode": self.mode}
@@ -126,16 +189,21 @@ class StrategyRunner:
                 self.state["needs_reconcile"] = True
             raise OrderFailed(f"{reason} order for {inst.symbol} failed: {type(e).__name__}") from e
         res = self._confirm(res)
+        if req.order_type == "LIMIT" and normalize_status(res.status) == "pending" and res.order_id and self.mode == "live":
+            res = self._settle_unfilled_limit(res)
         status = normalize_status(res.status)
         price = res.avg_price
-        if not price and status in ("filled", "pending"):
+        if not price and status == "filled" or (not price and status == "pending" and req.order_type == "MARKET"):
             try:
                 price = self.broker.ltp(inst)
             except Exception:
                 price = 0.0
         ev = {"time": now.isoformat(timespec="seconds"), "symbol": inst.symbol, "side": side.upper(), "qty": qty, "price": price,
-              "order_id": res.order_id, "status": res.status, "message": res.message, "tag": self.tag, "reason": reason, "mode": self.mode}
+              "order_id": res.order_id, "status": res.status, "message": res.message, "tag": self.tag, "reason": reason, "mode": self.mode,
+              "order_type": req.order_type, "limit_price": req.price if req.order_type == "LIMIT" else None}
         self.on_order(ev)
+        if req.order_type == "LIMIT" and status == "cancelled":
+            return {**ev, "_unfilled_limit": True}
         if status in ("rejected", "cancelled"):
             raise OrderFailed(f"{reason} order for {inst.symbol} {status}: {res.message}".strip())
         if not price:
@@ -233,7 +301,8 @@ class StrategyRunner:
         """Per-leg stop loss, trailing stop (ratchets after the check) and target, on LTP."""
         pos = self.state["position"]
         sl, tgt, trail = self.s.exit.stop_loss_pct, self.s.exit.target_pct, self.s.exit.trailing_sl_pct
-        if not pos or not (sl or tgt or trail):
+        sl_pts, tgt_pts = self.s.exit.stop_loss_points, self.s.exit.target_points
+        if not pos or not (sl or tgt or trail or sl_pts or tgt_pts):
             return
         for leg in pos["legs"]:
             if not leg["open"] or not leg["entry"]:
@@ -241,14 +310,15 @@ class StrategyRunner:
             px = self.broker.ltp(_inst_from_dict(leg["instrument"]))
             sign = 1 if leg["side"] == "buy" else -1
             chg = (px - leg["entry"]) / leg["entry"] * 100 * sign
+            pts = (px - leg["entry"]) * sign
             peak = leg.get("peak") or leg["entry"]
             from_peak = (px - peak) / peak * 100 * sign if peak else 0.0
             try:
-                if sl and chg <= -sl:
+                if (sl and chg <= -sl) or (sl_pts and pts <= -sl_pts):
                     self._close_leg(leg, now, "stop_loss")
                 elif trail and from_peak <= -trail:
                     self._close_leg(leg, now, "trailing_stop")
-                elif tgt and chg >= tgt:
+                elif (tgt and chg >= tgt) or (tgt_pts and pts >= tgt_pts):
                     self._close_leg(leg, now, "target")
                 elif trail:
                     leg["peak"] = max(peak, px) if sign > 0 else min(peak, px)

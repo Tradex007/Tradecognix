@@ -100,7 +100,7 @@ class ZerodhaAdapter(BrokerAdapter):
         frames, cur = [], start
         while cur < end:
             chunk_end = min(end, cur + timedelta(days=MAX_DAYS[timeframe]))
-            rows = self._client().historical_data(int(instrument.token), cur, chunk_end, INTERVALS[timeframe])
+            rows = self.throttled(self._client().historical_data, int(instrument.token), cur, chunk_end, INTERVALS[timeframe])
             frames.append(candles_frame([[r["date"], r["open"], r["high"], r["low"], r["close"], r.get("volume", 0)] for r in rows]))
             cur = chunk_end + timedelta(minutes=1)
         df = pd.concat(frames) if frames else candles_frame([])
@@ -108,7 +108,7 @@ class ZerodhaAdapter(BrokerAdapter):
 
     def ltp(self, instrument: Instrument) -> float:
         key = f"{instrument.exchange}:{instrument.symbol}"
-        return float(self._client().ltp(key)[key]["last_price"])
+        return float(self.throttled(self._client().ltp, key)[key]["last_price"])
 
     def place_order(self, req: OrderRequest) -> OrderResult:
         k = self._client()

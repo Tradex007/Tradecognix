@@ -654,7 +654,7 @@
         function patchUser(id, body, el) {
           if (el) el.disabled = true;
           return api("/api/admin/users/" + id, { method: "PATCH", body: body })
-            .then(function () { toast(DEMO ? "Updated (demo, not saved)" : "Updated"); return load(); })
+            .then(function () { toast((body.is_active === false ? "User disabled and their sessions killed" : "Updated") + (DEMO ? " (demo, not saved)" : "")); return load(); })
             .catch(function (x) { if (x.message !== "auth") { toast(x.message, true); load(); } })
             .then(function () { if (el) el.disabled = false; });
         }
@@ -769,6 +769,8 @@
           $("#login").hidden = true; $("#app").hidden = false;
           $$("[data-who]").forEach(function (el) { el.textContent = email || ""; el.title = email || ""; });
           $("#demo-banner").hidden = !DEMO;
+          $("#stats-sub").textContent = DEMO ? "Illustrative platform numbers. Nothing here comes from a live API." : "Platform-wide numbers from the TradeCognix API.";
+          setCount("waitlist", DEMO ? 3 : null);
           $$("[data-mode-tag]").forEach(function (el) { el.textContent = DEMO ? "Demo" : "Admin"; el.classList.toggle("tag--demo", DEMO); });
           setCount("users", null); setCount("strategies", null); setCount("running", null);
           go("stats"); clearInterval(timer);
@@ -796,7 +798,7 @@
             { session_id: 921, name: "Expiry strangle", mode: "paper", broker: "fyers", position: null, trades_today: 4, pnl_today: -3150, halted: true, kill_switch: false }
           ];
           D.history = [
-            { id: 921, owner: D.users[6].email, strategy_id: 158, mode: "paper", status: "running", halt_reason: "Daily loss limit reached", started_at: ago(140), stopped_at: null },
+            { id: 921, owner: D.users[6].email, strategy_id: 158, mode: "paper", status: "halted", halt_reason: "Daily loss limit reached", started_at: ago(140), stopped_at: null },
             { id: 918, owner: D.users[4].email, strategy_id: 152, mode: "live", status: "running", halt_reason: null, started_at: ago(185), stopped_at: null },
             { id: 915, owner: D.users[0].email, strategy_id: 140, mode: "paper", status: "running", halt_reason: null, started_at: ago(190), stopped_at: null },
             { id: 912, owner: D.users[1].email, strategy_id: 143, mode: "live", status: "running", halt_reason: null, started_at: ago(196), stopped_at: null },
@@ -843,6 +845,9 @@
                 if (u.id === 1 && (b.role === "client" || b.is_active === false)) return reject(new Error("You cannot demote or disable yourself"));
                 if (b.role) u.role = b.role;
                 if (b.is_active != null) u.is_active = b.is_active;
+                if (b.is_active === false) { // as the API does: disabling a user kills their sessions
+                  D.history.filter(function (h) { return h.owner === u.email && D.running.some(function (x) { return String(x.session_id) === String(h.id); }); }).forEach(function (h) { killDemo(h.id); h.halt_reason = "User disabled by admin"; });
+                }
                 if (b.plan) { u.plan = u.stored_plan = b.plan; if (b.plan === "free") u.plan_expires_at = null; }
                 return resolve({ ok: true, plan: u.plan });
               }

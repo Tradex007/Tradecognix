@@ -78,12 +78,18 @@ class Backtester:
         iv: float | None = None,
         option_price_fn: OptionPriceFn | None = None,
         whipsaw_bars: int = 2,
+        cooldown_bars_after_loss: int = 0,
+        entry_mask: pd.Series | None = None,
     ):
         self.s = strategy
         self.cfg = cost_cfg or CostConfig()
         self.iv = iv
         self.option_price_fn = option_price_fn
         self.whipsaw_bars = whipsaw_bars
+        # What-if knobs used by the autopsy: block re-entry for N bars after a losing exit, and/or
+        # only allow entries on bars where `entry_mask` is True (aligned to the candle index).
+        self.cooldown_bars_after_loss = max(0, int(cooldown_bars_after_loss))
+        self.entry_mask = entry_mask
         self.segment = segment_for(strategy.instrument_type, strategy.intraday)
         self.flags: set[str] = set()
 
@@ -138,7 +144,8 @@ class Backtester:
 
     def _check_stops(self, pos: Position, bar: pd.Series, ts: datetime) -> None:
         sl, tgt, trail = self.s.exit.stop_loss_pct, self.s.exit.target_pct, self.s.exit.trailing_sl_pct
-        if not (sl or tgt or trail):
+        sl_pts, tgt_pts = self.s.exit.stop_loss_points, self.s.exit.target_points
+        if not (sl or tgt or trail or sl_pts or tgt_pts):
             return
         for leg in pos.legs:
             if not leg.open:
@@ -156,6 +163,10 @@ class Backtester:
             stop_px, reason = None, "stop_loss"
             if sl:
                 stop_px = e * (1 - sl / 100) if leg.sign > 0 else e * (1 + sl / 100)
+            if sl_pts:  # the tighter of a % and a points stop wins
+                ppx = e - sl_pts if leg.sign > 0 else e + sl_pts
+                if stop_px is None or (ppx > stop_px if leg.sign > 0 else ppx < stop_px):
+                    stop_px = ppx
             if trail:
                 tpx = leg.peak * (1 - trail / 100) if leg.sign > 0 else leg.peak * (1 + trail / 100)
                 tighter = stop_px is None or (tpx > stop_px if leg.sign > 0 else tpx < stop_px)
@@ -166,8 +177,14 @@ class Backtester:
                 fill = min(stop_px, open_px) if leg.sign > 0 else max(stop_px, open_px)
                 self._close_leg(pos, leg, round(fill, 2), ts, reason)
                 continue
+            tgt_px = None
             if tgt:
                 tgt_px = e * (1 + tgt / 100) if leg.sign > 0 else e * (1 - tgt / 100)
+            if tgt_pts:  # the nearer of a % and a points target wins
+                ppx = e + tgt_pts if leg.sign > 0 else e - tgt_pts
+                if tgt_px is None or (ppx < tgt_px if leg.sign > 0 else ppx > tgt_px):
+                    tgt_px = ppx
+            if tgt_px is not None:
                 if (leg.sign > 0 and fav_px >= tgt_px) or (leg.sign < 0 and fav_px <= tgt_px):
                     fill = max(tgt_px, open_px) if leg.sign > 0 else min(tgt_px, open_px)
                     self._close_leg(pos, leg, round(fill, 2), ts, "target")
@@ -237,6 +254,10 @@ class Backtester:
         close_dt = bar_close_datetimes(idx, s.timeframe)
         daily = TF_MINUTES[s.timeframe] >= 1440
         session_days = sorted({d.date().isoformat() for d in days})
+        mask = None
+        if self.entry_mask is not None:
+            mask = self.entry_mask.reindex(idx).fillna(True).astype(bool).to_numpy()
+        blocked_until = -1  # last bar index on which entries are blocked by the loss cooldown
         for i in range(len(f)):
             ts = close_dt[i].to_pydatetime()  # decisions happen at bar close (capped at 15:30)
             bar = f.iloc[i]
@@ -266,6 +287,8 @@ class Backtester:
                     pnl_today += t["net_pnl"]
                     trades_today += 1
                     pos = None
+                    if self.cooldown_bars_after_loss and t["net_pnl"] < 0:
+                        blocked_until = i + self.cooldown_bars_after_loss
                     if s.risk.daily_loss_cap and pnl_today <= -s.risk.daily_loss_cap:
                         halted = True
 
@@ -275,6 +298,8 @@ class Backtester:
                     in_window = i < len(f) - 1
                 else:
                     in_window = win_start <= ct <= win_end and ct < hard and not (s.intraday and bool(last_of_day.iloc[i]))
+                if in_window and (i <= blocked_until or (mask is not None and not mask[i])):
+                    in_window = False
                 if in_window:
                     if s.direction in ("long", "both", "neutral") and bool(sig.long_entry.iloc[i]):
                         pos = self._open("long", ts, i, spot)

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, select
 
+from ..backtest.autopsy import analyse
 from ..backtest.costs import CostConfig
 from ..backtest.engine import run_backtest
 from ..backtest.sweep import sweep
@@ -21,7 +22,7 @@ from ..strategy.dsl import Strategy
 from ..strategy.explain import explain
 from ..strategy.parser import parse_strategy
 from .brokers import adapter_for, get_account
-from .deps import current_user, optional_user
+from .deps import MAX_DB_ID, DbId, current_user, optional_user
 from .strategies import limit_anonymous, validate_spec
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
@@ -29,14 +30,14 @@ router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 
 class BacktestIn(BaseModel):
     strategy: Optional[dict[str, Any]] = None
-    strategy_id: Optional[int] = None
+    strategy_id: Optional[int] = Field(None, ge=1, le=MAX_DB_ID)
     text: Optional[str] = Field(None, max_length=4000)
     days: int = Field(60, ge=5, le=750)
-    seed: int = 7
+    seed: int = Field(7, ge=0, le=2**32 - 1)  # numpy refuses negative seeds (was a 500)
     slippage_pct: Optional[float] = Field(None, ge=0, le=10, description="% of price per fill; omit for the per-segment default (options 0.5, futures 0.01, equity 0.05)")
     brokerage_per_order: float = Field(20.0, ge=0, le=100)
     iv: Optional[float] = Field(None, gt=0.01, lt=2.0, description="Annualised IV for the option premium proxy")
-    broker_account_id: Optional[int] = Field(None, description="Use real candles from this connected broker")
+    broker_account_id: Optional[int] = Field(None, ge=1, le=MAX_DB_ID, description="Use real candles from this connected broker")
     save: bool = True
 
 
@@ -73,6 +74,8 @@ def _base_candles(body: BacktestIn, s: Strategy, user: Optional[User], db: Sessi
         if not user:
             raise HTTPException(401, "Login required for broker data")
         acc = get_account(db, user, body.broker_account_id)
+        if acc.broker == "paper":
+            raise HTTPException(422, "Paper accounts have no market data; omit broker_account_id to backtest on synthetic data")
         try:
             ad = adapter_for(db, acc)
             matches = [] if s.is_index else ad.search_instruments(s.underlying)
@@ -131,13 +134,16 @@ def run(body: BacktestIn, request: Request, user: Optional[User] = Depends(optio
         raise HTTPException(422, str(e))
     if user:
         record_usage(db, user, "backtest")
+    extra = analyse(s, candles, res.trades, res.data_source, {"cost_cfg": cfg, "iv": body.iv})
     payload = {
         "strategy": s.model_dump(), "explanation": explain(s), "metrics": res.metrics, "equity": _downsample(res.equity),
         "trades": res.trades[-500:], "trade_count": len(res.trades), "flags": res.flags, "data_source": res.data_source,
-        "params": body.model_dump(exclude={"strategy", "text"}),
+        "params": body.model_dump(exclude={"strategy", "text"}), "regimes": extra["regimes"], "autopsy": extra["autopsy"],
     }
     if user and body.save:
-        run_row = BacktestRun(user_id=user.id, strategy_id=sid, spec=s.model_dump(), params=payload["params"], metrics=res.metrics,
+        # regimes/autopsy ride inside the metrics JSON column (no schema migration needed)
+        stored = {**res.metrics, "regimes": extra["regimes"], "autopsy": extra["autopsy"]}
+        run_row = BacktestRun(user_id=user.id, strategy_id=sid, spec=s.model_dump(), params=payload["params"], metrics=stored,
                               equity=payload["equity"], trades=res.trades, data_source=res.data_source, flags=res.flags)
         db.add(run_row)
         db.commit()
@@ -177,12 +183,17 @@ def _run(db: Session, user: User, rid: int) -> BacktestRun:
 
 
 @router.get("/{rid}")
-def get_run(rid: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def get_run(rid: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     r = _run(db, user, rid)
-    return {"id": r.id, "strategy": r.spec, "params": r.params, "metrics": r.metrics, "equity": r.equity, "flags": r.flags, "data_source": r.data_source, "created_at": as_utc(r.created_at)}
+    metrics = dict(r.metrics or {})
+    regimes, autopsy = metrics.pop("regimes", None), metrics.pop("autopsy", None)
+    out = {"id": r.id, "strategy": r.spec, "params": r.params, "metrics": metrics, "equity": r.equity, "flags": r.flags, "data_source": r.data_source, "created_at": as_utc(r.created_at)}
+    if regimes is not None:  # runs saved before round 2 have neither
+        out["regimes"], out["autopsy"] = regimes, autopsy
+    return out
 
 
 @router.get("/{rid}/trades")
-def get_trades(rid: int, user: User = Depends(current_user), db: Session = Depends(get_session), offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=2000)):
+def get_trades(rid: DbId, user: User = Depends(current_user), db: Session = Depends(get_session), offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=2000)):
     r = _run(db, user, rid)
     return {"total": len(r.trades), "trades": r.trades[offset: offset + limit]}

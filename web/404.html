@@ -9,16 +9,22 @@
     <meta name="robots" content="noindex" />
     <meta name="color-scheme" content="dark light" />
     
-    <link rel="icon" type="image/svg+xml" href="/tradecognix/mark.svg" />
-    <script>(function () { try { var t = localStorage.getItem("tc-theme"); document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark"); } catch (e) {} })();</script>
-    <link rel="stylesheet" href="/tradecognix/styles.css" />
-    <link rel="stylesheet" href="/tradecognix/legal.css" />
+    <script>
+      /* Served for any missing path, so everything resolves against the site root: /Tradecognix/ on GitHub Pages, / elsewhere.
+         The base and stylesheets are written here so the browser never fetches them relative to the bad URL. */
+      (function () {
+        var b = /^\/tradecognix(\/|$)/i.test(location.pathname) ? "/Tradecognix/" : "/";
+        document.write('<base href="' + b + '" /><link rel="icon" type="image/svg+xml" href="' + b + 'mark.svg" /><link rel="stylesheet" href="' + b + 'styles.css" /><link rel="stylesheet" href="' + b + 'legal.css" />');
+        try { var t = localStorage.getItem("tc-theme"); document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark"); } catch (e) {}
+      })();
+    </script>
+    <noscript><link rel="stylesheet" href="/Tradecognix/styles.css" /><link rel="stylesheet" href="/Tradecognix/legal.css" /></noscript>
   </head>
   <body>
     <header class="nav">
       <div class="wrap nav__in">
-        <a class="logo" href="/tradecognix/" aria-label="TradeCognix home"><img class="logo__mark" src="/tradecognix/mark.svg" alt="" width="28" height="28" /><span class="logo__word">TradeCognix</span></a>
-        <div class="nav__right"><a class="btn btn--primary btn--sm" href="/tradecognix/#top">Back to TradeCognix</a></div>
+        <a class="logo" href="./" aria-label="TradeCognix home"><svg class="logo__mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#00C46A" /><path d="M7.5 21.5 13 16l4 3.5 7.5-8.5" fill="none" stroke="#03130A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" /><circle cx="24.5" cy="11" r="2.3" fill="#03130A" /></svg><span class="logo__word">TradeCognix</span></a>
+        <div class="nav__right"><a class="btn btn--primary btn--sm" href="./#top">Back to TradeCognix</a></div>
       </div>
     </header>
     <main class="legal wrap" id="main">
@@ -26,11 +32,11 @@
         <p class="legal__meta">Error 404</p>
         <h1>That page isn't here.</h1>
         <p class="legal__lede">The link may be old or mistyped. Your strategies are safe; they live in the Studio, not on this page.</p>
-        <p><a class="btn btn--primary" href="/tradecognix/">Go to the home page</a> <a class="btn btn--ghost" href="/tradecognix/#faq">Read the FAQ</a></p>
+        <p><a class="btn btn--primary" href="./">Go to the home page</a> <a class="btn btn--ghost" href="./#faq">Read the FAQ</a></p>
       </div>
     </main>
     <footer class="legal-foot wrap">
-      <nav aria-label="Legal"><a href="/tradecognix/privacy.html">Privacy</a><a href="/tradecognix/terms.html">Terms</a><a href="/tradecognix/risk-disclosure.html">Risk disclosure</a><a href="/tradecognix/refund.html">Refunds</a><a href="mailto:contact@devcognix.com">contact@devcognix.com</a></nav>
+      <nav aria-label="Legal"><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="risk-disclosure.html">Risk disclosure</a><a href="refund.html">Refunds</a><a href="mailto:contact@devcognix.com">contact@devcognix.com</a></nav>
       <span>© 2026 TradeCognix · DevCognix</span>
     </footer>
   </body>

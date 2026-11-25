@@ -359,6 +359,13 @@ class RuleBasedParser:
         if trail and sl == trail:
             sl = None
 
+        def points(pattern: str) -> Optional[float]:
+            m = re.search(pattern + r"\D{0,12}?(\d+(?:\.\d+)?)\s*(?:points?|pts?)\b", t)
+            return float(m.group(1)) if m else None
+
+        sl_pts = points(r"(?:stop\s?-?\s?loss|\bsl\b|stoploss)") if sl is None else None
+        tgt_pts = points(r"(?:target|take\s?profit|\btp\b|profit target)") if tgt is None else None
+
         # ---- times: entry window & hard exit ----
         hard_exit = "15:15"
         win_start, win_end = "09:15", "15:00"
@@ -417,7 +424,8 @@ class RuleBasedParser:
                 indicators=indicators,
                 direction=direction,
                 entry=EntryRules(long=long_c, short=short_c, logic="all"),
-                exit=ExitRules(long=exit_long, short=exit_short, on_opposite_signal=on_opposite, stop_loss_pct=sl, target_pct=tgt, trailing_sl_pct=trail),
+                exit=ExitRules(long=exit_long, short=exit_short, on_opposite_signal=on_opposite, stop_loss_pct=sl, target_pct=tgt, trailing_sl_pct=trail,
+                               stop_loss_points=sl_pts, target_points=tgt_pts),
                 entry_window=TimeWindow(start=win_start, end=win_end),
                 hard_exit=hard_exit,
                 option=option,

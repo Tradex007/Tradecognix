@@ -13,7 +13,7 @@ from ..config import get_settings
 from ..db import get_session
 from ..engine.live import engine
 from ..models import BacktestRun, BrokerAccount, JournalEntry, LiveSession, OrderLog, Payment, StrategyRecord, User, WaitlistEntry, as_utc
-from .deps import admin_user
+from .deps import DbId, admin_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -39,7 +39,7 @@ class UserPatch(BaseModel):
 
 
 @router.patch("/users/{uid}")
-def patch_user(uid: int, body: UserPatch, admin: User = Depends(admin_user), db: Session = Depends(get_session)):
+def patch_user(uid: DbId, body: UserPatch, admin: User = Depends(admin_user), db: Session = Depends(get_session)):
     u = db.get(User, uid)
     if not u:
         raise HTTPException(404, "User not found")
@@ -95,7 +95,7 @@ def sessions(_: User = Depends(admin_user), db: Session = Depends(get_session)):
 
 
 @router.post("/sessions/{sid}/kill")
-def kill_one(sid: int, _: User = Depends(admin_user)):
+def kill_one(sid: DbId, _: User = Depends(admin_user)):
     engine.kill(sid)
     return {"ok": True}
 

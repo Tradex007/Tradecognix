@@ -103,15 +103,16 @@ class FyersAdapter(BrokerAdapter):
         frames, cur = [], start
         while cur < end:
             chunk_end = min(end, cur + timedelta(days=99))
-            resp = self._ok(self._client().history(data={"symbol": instrument.token, "resolution": RES[timeframe], "date_format": "1",
-                                                         "range_from": cur.strftime("%Y-%m-%d"), "range_to": chunk_end.strftime("%Y-%m-%d"), "cont_flag": "1"}), "history")
+            data = {"symbol": instrument.token, "resolution": RES[timeframe], "date_format": "1",
+                    "range_from": cur.strftime("%Y-%m-%d"), "range_to": chunk_end.strftime("%Y-%m-%d"), "cont_flag": "1"}
+            resp = self.throttled(lambda d=data: self._ok(self._client().history(data=d), "history"))
             frames.append(candles_frame(resp.get("candles", []), ts_unit="s"))
             cur = chunk_end + timedelta(days=1)
         df = pd.concat(frames) if frames else candles_frame([])
         return df[~df.index.duplicated()].sort_index()
 
     def ltp(self, instrument: Instrument) -> float:
-        d = self._ok(self._client().quotes(data={"symbols": instrument.token}), "quotes")
+        d = self.throttled(lambda: self._ok(self._client().quotes(data={"symbols": instrument.token}), "quotes"))
         return float(d["d"][0]["v"]["lp"])
 
     def place_order(self, req: OrderRequest) -> OrderResult:

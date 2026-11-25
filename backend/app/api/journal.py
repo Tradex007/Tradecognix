@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..models import JournalEntry, User, as_utc
-from .deps import current_user
+from .deps import DbId, current_user
 
 IST = ZoneInfo("Asia/Kolkata")
 router = APIRouter(prefix="/api/journal", tags=["journal"])
@@ -70,7 +70,7 @@ class EntryPatch(BaseModel):
 
 
 @router.patch("/{eid}")
-def patch(eid: int, body: EntryPatch, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def patch(eid: DbId, body: EntryPatch, user: User = Depends(current_user), db: Session = Depends(get_session)):
     e = db.get(JournalEntry, eid)
     if not e or e.user_id != user.id:
         raise HTTPException(404, "Entry not found")

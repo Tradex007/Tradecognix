@@ -50,7 +50,7 @@ class IndicatorSpec(BaseModel):
             raise ValueError(f"indicator id {v!r} must be a short identifier (letters, digits, _) and not a price field")
         return v
 
-    kind: Literal["ema", "sma", "rsi", "vwap", "atr", "supertrend", "orb"]
+    kind: Literal["ema", "sma", "rsi", "vwap", "atr", "supertrend", "orb", "adx"]
     period: Optional[int] = Field(None, ge=1, le=500)
     multiplier: Optional[float] = Field(None, gt=0, le=20)
     source: Literal["close", "open", "high", "low", "hl2"] = "close"
@@ -63,7 +63,7 @@ class IndicatorSpec(BaseModel):
             raise ValueError(f"{self.kind} needs a period")
         if self.kind == "rsi" and self.period is None:
             self.period = 14
-        if self.kind == "atr" and self.period is None:
+        if self.kind in ("atr", "adx") and self.period is None:
             self.period = 14
         if self.kind == "supertrend":
             self.period = self.period or 10
@@ -91,14 +91,19 @@ class Condition(BaseModel):
             raise ValueError("a condition must compare at least one price/indicator, not two numbers")
         return self
 
+    @property
+    def is_trend_filter(self) -> bool:
+        """"adx14 > 25"-style gate (by the copilot's/parser's id convention): direction-neutral."""
+        return self.left.startswith("adx") and isinstance(self.right, (int, float)) and self.op in ("gt", "gte", "lt", "lte")
+
     def mirrored(self) -> "Condition":
         """Opposite-direction version (crosses_above <-> crosses_below, gt <-> lt).
 
         Supertrend direction crossing 0 and RSI levels are mirrored around their neutral point.
         """
         swap = {"crosses_above": "crosses_below", "crosses_below": "crosses_above", "gt": "lt", "lt": "gt", "gte": "lte", "lte": "gte"}
-        if self.op == "at_time":
-            return self.model_copy()
+        if self.op == "at_time" or self.is_trend_filter:
+            return self.model_copy()  # ADX measures trend strength, not direction: same for both sides
         right = self.right
         if isinstance(right, (int, float)) and self.left.startswith("rsi"):
             right = 100 - float(right)
@@ -117,6 +122,8 @@ class ExitRules(BaseModel):
     on_opposite_signal: bool = True
     stop_loss_pct: Optional[float] = Field(None, gt=0, le=100, description="% of entry premium/price, per leg")
     target_pct: Optional[float] = Field(None, gt=0, le=1000)
+    stop_loss_points: Optional[float] = Field(None, gt=0, le=100000, description="Absolute price points on the traded instrument, per leg")
+    target_points: Optional[float] = Field(None, gt=0, le=100000)
     trailing_sl_pct: Optional[float] = Field(None, gt=0, le=100)
 
 
@@ -221,10 +228,14 @@ class Strategy(BaseModel):
         return self.entry.short or ([c.mirrored() for c in self.entry.long] if self.direction == "both" else [])
 
     def opposite_of_long(self) -> list[Condition]:
-        return self.entry.short or [c.mirrored() for c in self.entry.long]
+        """Conditions of the opposite signal used as an exit. Trend filters (ADX gates) only gate
+        entries; they are dropped here so "exit on the opposite signal" does not wait for ADX."""
+        conds = self.entry.short or [c.mirrored() for c in self.entry.long]
+        return [c for c in conds if not c.is_trend_filter]
 
     def opposite_of_short(self) -> list[Condition]:
-        return self.entry.long or [c.mirrored() for c in self.entry.short]
+        conds = self.entry.long or [c.mirrored() for c in self.entry.short]
+        return [c for c in conds if not c.is_trend_filter]
 
     @property
     def is_index(self) -> bool:

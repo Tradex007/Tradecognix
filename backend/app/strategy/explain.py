@@ -86,8 +86,12 @@ def explain(s: Strategy) -> str:
         exits.append(f"when {_join(s, s.exit.short, 'any')} (short side)")
     if s.exit.stop_loss_pct:
         exits.append(f"at a {s.exit.stop_loss_pct:g}% stop loss" + (" per leg" if s.option and s.option.mode.startswith(("straddle", "strangle")) else ""))
+    if s.exit.stop_loss_points:
+        exits.append(f"at a {s.exit.stop_loss_points:g}-point stop loss" + (" per leg" if s.option else ""))
     if s.exit.target_pct:
         exits.append(f"at a {s.exit.target_pct:g}% target")
+    if s.exit.target_points:
+        exits.append(f"at a {s.exit.target_points:g}-point target")
     if s.exit.trailing_sl_pct:
         exits.append(f"on a {s.exit.trailing_sl_pct:g}% trailing stop")
     hard = f"and always by {s.hard_exit} IST" if s.intraday else ""
@@ -123,8 +127,12 @@ def rules_table(s: Strategy) -> dict[str, str]:
         ex.append(_join(s, s.exit.short, "any"))
     if s.exit.stop_loss_pct:
         ex.append(f"SL {s.exit.stop_loss_pct:g}%")
+    if s.exit.stop_loss_points:
+        ex.append(f"SL {s.exit.stop_loss_points:g} pts")
     if s.exit.target_pct:
         ex.append(f"target {s.exit.target_pct:g}%")
+    if s.exit.target_points:
+        ex.append(f"target {s.exit.target_points:g} pts")
     if s.exit.trailing_sl_pct:
         ex.append(f"trail {s.exit.trailing_sl_pct:g}%")
     if s.intraday:

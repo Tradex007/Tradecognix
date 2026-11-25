@@ -16,7 +16,7 @@ import time
 
 from ..models import BrokerAccount, LiveSession, User, as_utc, utcnow
 from ..security import CredentialVault, mask, scrub
-from .deps import current_user
+from .deps import DbId, current_user
 
 log = logging.getLogger("tradecognix.brokers")
 
@@ -143,13 +143,13 @@ def connect(body: AccountIn, user: User = Depends(current_user), db: Session = D
 
 
 @router.post("/accounts/{account_id}/test")
-def test_account(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def test_account(account_id: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     acc = get_account(db, user, account_id)
     return {"test": _test(db, acc), "account": account_out(acc)}
 
 
 @router.get("/accounts/{account_id}/funds")
-def funds(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def funds(account_id: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     acc = get_account(db, user, account_id)
     try:
         f = adapter_for(db, acc).funds()
@@ -164,14 +164,14 @@ def funds(account_id: int, user: User = Depends(current_user), db: Session = Dep
 
 
 @router.get("/accounts/{account_id}/credentials")
-def masked_credentials(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def masked_credentials(account_id: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     acc = get_account(db, user, account_id)
     creds = CredentialVault().decrypt(acc.credentials_enc)
     return {"credentials": {k: mask(str(v)) for k, v in creds.items()}}
 
 
 @router.delete("/accounts/{account_id}")
-def delete_account(account_id: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def delete_account(account_id: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     acc = get_account(db, user, account_id)
     if db.exec(select(LiveSession).where(LiveSession.broker_account_id == acc.id, LiveSession.status == "running")).first():
         raise HTTPException(409, "Stop the sessions using this broker account first")

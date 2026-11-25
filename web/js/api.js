@@ -165,7 +165,10 @@
       trades: res.trades.slice(-8).reverse().map(function (t) {
         return { when: F.istDate(new Date(t.entry_time)) + " · " + t.entry_time.slice(11, 16), side: t.side === "sell" ? "Sell" : "Buy", instrument: t.instrument, entry: t.entry_price, exit: t.exit_price, net: t.net_pnl };
       }),
-      totalTrades: m.trades
+      totalTrades: m.trades,
+      // optional (contract §2): absent on older APIs, and the UI hides the cards then
+      regimes: Array.isArray(res.regimes) && res.regimes.length ? res.regimes : null,
+      autopsy: res.autopsy && typeof res.autopsy === "object" ? res.autopsy : null
     };
   }
 
@@ -237,6 +240,28 @@
     var run = $("#x-run"); if (run) run.click();
   }
 
+  /* Strategy Copilot (contract §1): POST /api/strategies/copilot. Resolves to what app.js renders.
+     Errors the user should see are flagged userFacing; anything else (older API without the endpoint,
+     network) rejects plainly and app.js applies the same instruction in the browser instead. */
+  function copilot(instruction) {
+    if (!state.spec) return Promise.reject(new Error("no parsed strategy"));
+    var prev = applyEdits(state.spec);
+    return api("/api/strategies/copilot", { method: "POST", body: { spec: prev, instruction: instruction } })
+      .then(function (res) {
+        if (!res || !res.understood) return { understood: false, changes: [], explanation: (res && res.explanation) || "" };
+        var rules = res.rules ? Promise.resolve({ rules: res.rules, explanation: res.explanation }) : api("/api/strategies/explain", { method: "POST", body: res.spec });
+        return rules.then(function (ex) {
+          state.spec = res.spec; state.rules = ex.rules;
+          return { understood: true, changes: res.changes || [], explanation: res.explanation || ex.explanation, rules: ex.rules, prevSpec: prev };
+        });
+      })
+      .catch(function (x) {
+        if (x.status === 400 || x.status === 422 || x.status === 429) { var e = new Error(x.message + limitHint(x)); e.userFacing = true; throw e; }
+        console.warn("[TradeCognix] copilot API unavailable:", x.message);
+        throw x;
+      });
+  }
+
   function saveStrategy() {
     if (state.strategyId) return Promise.resolve(state.strategyId);
     return api("/api/strategies", { method: "POST", body: { spec: applyEdits(state.spec), prompt: state.prompt } })
@@ -245,9 +270,10 @@
 
   function watch() {
     if (state.ws || !window.WebSocket) return;
-    var url = BASE.replace(/^http/, "ws") + "/ws/live?token=" + encodeURIComponent(token());
+    // Contract §3: the JWT travels as a subprotocol, never in the URL (keeps it out of proxy and server logs).
+    var url = BASE.replace(/^http/, "ws") + "/ws/live";
     try {
-      state.ws = new WebSocket(url);
+      state.ws = new WebSocket(url, ["tc-auth", token()]);
       state.ws.onmessage = function (m) {
         var d = JSON.parse(m.data);
         if (d.type === "order") toast((d.mode === "live" ? "LIVE " : "Paper ") + d.side + " " + d.qty + " " + d.symbol + " @ " + d.price);
@@ -411,7 +437,7 @@
 
   function openRun(id) {
     Promise.all([api("/api/backtests/" + id), api("/api/backtests/" + id + "/trades?limit=2000")]).then(function (rs) {
-      var run = rs[0], res = { strategy: run.strategy, metrics: run.metrics, equity: run.equity, flags: run.flags || [], data_source: run.data_source, trades: rs[1].trades || [] };
+      var run = rs[0], res = { strategy: run.strategy, metrics: run.metrics, equity: run.equity, flags: run.flags || [], data_source: run.data_source, trades: rs[1].trades || [], regimes: run.regimes, autopsy: run.autopsy };
       var model = toModel(res);
       UI().state.model = model; UI().nav("studio");
       setTimeout(function () { UI().renderResults(model, true); var sw = $("#x-sweep"); if (sw) sw.hidden = true; }, 0);
@@ -581,7 +607,7 @@
   }
   if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", boot); else boot();
 
-  window.TradeCognixAPI = { api: api, state: state, signOut: function () { localStorage.removeItem("tc_token"); toast("Signed out"); } };
+  window.TradeCognixAPI = { api: api, state: state, copilot: copilot, restoreSpec: function (sp) { state.spec = sp; }, signOut: function () { localStorage.removeItem("tc_token"); toast("Signed out"); } };
 })();
 
 /*

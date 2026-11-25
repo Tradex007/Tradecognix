@@ -54,12 +54,12 @@ def _user_prompt(text: str) -> str:
     return f"JSON Schema:\n{json.dumps(strategy_json_schema())}\n\nStrategy text:\n{text}"
 
 
-def call_gemini(text: str) -> str:
+def call_gemini(text: str, system_prompt: str = SYSTEM_PROMPT, user_prompt: str | None = None) -> str:
     s = get_settings()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{s.gemini_model}:generateContent"
     body = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": _user_prompt(text)}]}],
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt if user_prompt is not None else _user_prompt(text)}]}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
     }
     # Key in a header, not the query string: httpx error messages and proxy logs include the URL.
@@ -68,14 +68,15 @@ def call_gemini(text: str) -> str:
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def call_openai_compatible(text: str) -> str:
+def call_openai_compatible(text: str, system_prompt: str = SYSTEM_PROMPT, user_prompt: str | None = None) -> str:
     s = get_settings()
     headers = {"Authorization": f"Bearer {s.openai_api_key}"} if s.openai_api_key else {}
     body = {
         "model": s.openai_model,
         "temperature": 0,
         "response_format": {"type": "json_object"},
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": _user_prompt(text)}],
+        "messages": [{"role": "system", "content": system_prompt},
+                     {"role": "user", "content": user_prompt if user_prompt is not None else _user_prompt(text)}],
     }
     r = httpx.post(s.openai_base_url.rstrip("/") + "/chat/completions", json=body, headers=headers, timeout=s.llm_timeout_seconds)
     r.raise_for_status()

@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # Engine
     scheduler_enabled: bool = True
     paper_starting_capital: float = 500000.0
+    # Market-order price protection: the engine sends LIMIT orders at LTP +/- this % (rounded to the
+    # tick; buys capped above LTP, sells floored below). 0 disables it (plain MARKET orders).
+    market_protection_pct: float = Field(1.0, ge=0, le=20)
     default_slippage_pct: Optional[float] = Field(None, description="Slippage as % of price per fill; None = per-segment default (options 0.5, futures 0.01, equity 0.05)")
 
     @property

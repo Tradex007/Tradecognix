@@ -36,6 +36,8 @@ def compute_indicators(df: pd.DataFrame, strategy: Strategy) -> pd.DataFrame:
             out[spec.id] = ind.vwap(out)
         elif spec.kind == "atr":
             out[spec.id] = ind.atr(out, spec.period)
+        elif spec.kind == "adx":
+            out[spec.id] = ind.adx(out, spec.period)["adx"]
         elif spec.kind == "supertrend":
             st = ind.supertrend(out, spec.period, spec.multiplier)
             out[spec.id] = st["supertrend"]

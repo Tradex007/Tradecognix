@@ -22,6 +22,26 @@ class BrokerError(RuntimeError):
     """A broker call failed (auth, network, rejection)."""
 
 
+def protected_limit_price(ltp: float, side: str, pct: float, tick: float = 0.05) -> float:
+    """Price-protected LIMIT price for what would otherwise be a MARKET order.
+
+    BUY is capped `pct`% above LTP (rounded *down* to the tick, so the cap is never exceeded);
+    SELL is floored `pct`% below LTP (rounded *up*). Never below one tick.
+    """
+    import math
+
+    if not (ltp and ltp > 0 and math.isfinite(ltp)):
+        raise ValueError("LTP must be a positive number")
+    tick = tick if tick and tick > 0 else 0.05
+    raw = ltp * (1 + pct / 100) if side.upper() == "BUY" else ltp * (1 - pct / 100)
+    ticks = math.floor(raw / tick + 1e-9) if side.upper() == "BUY" else math.ceil(raw / tick - 1e-9)
+    if side.upper() == "BUY":
+        ticks = max(ticks, math.ceil(ltp / tick - 1e-9))  # a band smaller than a tick still lets the order trade at LTP
+    else:
+        ticks = min(ticks, math.floor(ltp / tick + 1e-9))
+    return round(max(tick, ticks * tick), 6)
+
+
 class BrokerNotImplemented(NotImplementedError):
     """Adapter is a documented skeleton; contributions welcome."""
 
@@ -136,6 +156,12 @@ class BrokerAdapter(ABC):
             "key": cls.key, "name": cls.display_name, "api": cls.api_name, "status": cls.status, "docs": cls.docs_url,
             "fields": [asdict(f) for f in cls.credential_fields],
         }
+
+    def throttled(self, fn, *args, **kwargs):
+        """Run a market-data call under this broker's shared token bucket with 429 backoff."""
+        from . import throttle
+
+        return throttle.call(self.key, fn, *args, **kwargs)
 
     def require(self, *keys: str) -> None:
         missing = [k for k in keys if not self.credentials.get(k)]

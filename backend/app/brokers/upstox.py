@@ -53,6 +53,8 @@ class UpstoxAdapter(BrokerAdapter):
 
     def _req(self, method: str, url: str, **kw) -> Any:
         r = self._http.request(method, url, headers=self._headers(), **kw)
+        if r.status_code == 429:
+            raise BrokerError("Upstox: HTTP 429 too many requests")
         try:
             body = r.json()
         except ValueError:
@@ -122,12 +124,12 @@ class UpstoxAdapter(BrokerAdapter):
     def historical_candles(self, instrument: Instrument, timeframe: str, start: datetime, end: datetime) -> pd.DataFrame:
         unit, n = V3_UNITS[timeframe]
         key = httpx.URL(f"{API}/v3/historical-candle/{instrument.token}/{unit}/{n}/{end:%Y-%m-%d}/{start:%Y-%m-%d}")
-        d = self._req("GET", str(key)) or {}
+        d = self.throttled(self._req, "GET", str(key)) or {}
         rows = sorted(d.get("candles", []), key=lambda c: c[0])
         return candles_frame(rows)
 
     def ltp(self, instrument: Instrument) -> float:
-        d = self._req("GET", f"{API}/v2/market-quote/ltp", params={"instrument_key": instrument.token}) or {}
+        d = self.throttled(self._req, "GET", f"{API}/v2/market-quote/ltp", params={"instrument_key": instrument.token}) or {}
         return float(next(iter(d.values()))["last_price"])
 
     def place_order(self, req: OrderRequest) -> OrderResult:

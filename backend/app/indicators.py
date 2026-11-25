@@ -97,6 +97,31 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return wilder(true_range(df), period)
 
 
+def adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """Wilder's DMI/ADX, matching TradingView ``ta.dmi(period, period)``.
+
+    +DM/-DM and true range start on the second bar (the first has no previous bar), are
+    smoothed with Wilder's RMA (SMA-seeded), and DX = 100*|+DI - -DI| / (+DI + -DI) (0 when both
+    DIs are 0). ADX is the Wilder RMA of DX, so the first value appears at bar 2*period - 1
+    (0-based). Returns columns ``adx``, ``plus_di``, ``minus_di``.
+    """
+    high, low, close = df["high"].astype(float), df["low"].astype(float), df["close"].astype(float)
+    up = high.diff()
+    down = -low.diff()
+    plus_dm = up.where((up > down) & (up > 0), 0.0).where(up.notna())
+    minus_dm = down.where((down > up) & (down > 0), 0.0).where(down.notna())
+    prev_close = close.shift(1)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1).where(prev_close.notna())
+    tr_s = wilder(tr, period)
+    plus_di = 100 * wilder(plus_dm, period) / tr_s.replace(0, np.nan)
+    minus_di = 100 * wilder(minus_dm, period) / tr_s.replace(0, np.nan)
+    plus_di = plus_di.where(tr_s != 0, 0.0).where(tr_s.notna())
+    minus_di = minus_di.where(tr_s != 0, 0.0).where(tr_s.notna())
+    total = plus_di + minus_di
+    dx = 100 * (plus_di - minus_di).abs() / total.where(total != 0, 1.0)
+    return pd.DataFrame({"adx": wilder(dx, period), "plus_di": plus_di, "minus_di": minus_di}, index=df.index)
+
+
 def supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> pd.DataFrame:
     """Supertrend. Returns DataFrame with 'supertrend' line and 'direction' (+1 up/green, -1 down/red).
 

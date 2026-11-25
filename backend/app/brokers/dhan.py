@@ -110,12 +110,12 @@ class DhanAdapter(BrokerAdapter):
         if timeframe not in TF:
             raise BrokerError(f"Dhan intraday supports {list(TF)}; resample 5m for {timeframe}")
         inst_type = "INDEX" if instrument.exchange == "IDX_I" else ("OPTIDX" if instrument.option_type else "EQUITY")
-        d = self._ok(self._client().intraday_minute_data(instrument.token, instrument.exchange, inst_type, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), TF[timeframe]), "intraday_minute_data") or {}
+        d = self.throttled(lambda: self._ok(self._client().intraday_minute_data(instrument.token, instrument.exchange, inst_type, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), TF[timeframe]), "intraday_minute_data")) or {}
         rows = list(zip(d.get("timestamp", []), d.get("open", []), d.get("high", []), d.get("low", []), d.get("close", []), d.get("volume", [0] * len(d.get("open", [])))))
         return candles_frame(rows, ts_unit="s")
 
     def ltp(self, instrument: Instrument) -> float:
-        d = self._ok(self._client().ticker_data({instrument.exchange: [int(instrument.token)]}), "ltp") or {}
+        d = self.throttled(lambda: self._ok(self._client().ticker_data({instrument.exchange: [int(instrument.token)]}), "ltp")) or {}
         inner = d.get("data", d)
         return float(inner[instrument.exchange][str(instrument.token)]["last_price"])
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -167,19 +166,19 @@ class AngelOneAdapter(BrokerAdapter):
         step = timedelta(days=MAX_DAYS[timeframe])
         while cur < end:
             chunk_end = min(end, cur + step)
-            resp = api.getCandleData({
+            params = {
                 "exchange": instrument.exchange, "symboltoken": instrument.token, "interval": INTERVALS[timeframe],
                 "fromdate": cur.strftime("%Y-%m-%d %H:%M"), "todate": chunk_end.strftime("%Y-%m-%d %H:%M"),
-            })
-            rows = self._ok(resp, "getCandleData") or []
+            }
+            # shared token bucket (~3 req/s for SmartAPI history) + backoff on "exceeding access rate"
+            rows = self.throttled(lambda p=params: self._ok(api.getCandleData(p), "getCandleData")) or []
             frames.append(candles_frame(rows))
             cur = chunk_end + timedelta(minutes=1)
-            time.sleep(0.35)  # SmartAPI historical rate limit is ~3 req/s
         df = pd.concat(frames) if frames else candles_frame([])
         return df[~df.index.duplicated()].sort_index()
 
     def ltp(self, instrument: Instrument) -> float:
-        d = self._ok(self._client().ltpData(instrument.exchange, instrument.symbol, instrument.token), "ltpData")
+        d = self.throttled(lambda: self._ok(self._client().ltpData(instrument.exchange, instrument.symbol, instrument.token), "ltpData"))
         return float(d["ltp"])
 
     # ---------- orders ----------

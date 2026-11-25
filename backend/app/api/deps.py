@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Path, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session
 
@@ -44,3 +44,9 @@ def admin_user(user: User = Depends(current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin only")
     return user
+
+
+# Database ids: SQLite/Postgres integers are 64-bit, and a larger path id ("/api/strategies/99999999999999999999")
+# used to crash the DB driver into a 500. Out-of-range ids are now a clean 422.
+MAX_DB_ID = 2**63 - 1
+DbId = Annotated[int, Path(ge=1, le=MAX_DB_ID)]

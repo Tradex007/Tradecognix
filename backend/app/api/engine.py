@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, select
 
 from ..billing.plans import check_session_limit, require_feature
@@ -13,17 +13,18 @@ from ..config import get_settings
 from ..db import get_session
 from ..engine.guardrails import GuardrailError, assert_live_allowed
 from ..engine.live import engine
+from ..strategy.dsl import Strategy
 from ..models import BrokerAccount, LiveSession, OrderLog, StrategyRecord, User, as_utc
 from .brokers import adapter_for, get_account
-from .deps import admin_user, current_user
+from .deps import MAX_DB_ID, DbId, admin_user, current_user
 
 router = APIRouter(prefix="/api/engine", tags=["paper/live"])
 
 
 class StartIn(BaseModel):
-    strategy_id: int
+    strategy_id: int = Field(ge=1, le=MAX_DB_ID)
     mode: Literal["paper", "live"] = "paper"
-    broker_account_id: Optional[int] = None
+    broker_account_id: Optional[int] = Field(None, ge=1, le=MAX_DB_ID)
     confirm_text: Optional[str] = None
 
 
@@ -44,6 +45,13 @@ def start(body: StartIn, user: User = Depends(current_user), db: Session = Depen
     existing = db.exec(select(LiveSession).where(LiveSession.strategy_id == rec.id, LiveSession.status == "running")).first()
     if existing:
         raise HTTPException(409, f"Strategy already running (session {existing.id})")
+    try:
+        spec = Strategy.model_validate(rec.spec)
+    except ValidationError as e:
+        raise HTTPException(422, f"Saved strategy is no longer valid: {e.errors(include_url=False)[0]['msg']}")
+    if spec.instrument_type in ("future", "index"):
+        # the runner has no futures-contract resolver yet: every entry would error at runtime
+        raise HTTPException(400, "Paper/live trading of futures is not available yet; backtest it, or switch the strategy to options or equity")
     if body.mode == "live":
         require_feature(user, "live_trading")
     check_session_limit(db, user)
@@ -85,7 +93,7 @@ def _own_session(db: Session, user: User, sid: int) -> LiveSession:
 
 
 @router.post("/{sid}/stop")
-def stop(sid: int, user: User = Depends(current_user), db: Session = Depends(get_session)):
+def stop(sid: DbId, user: User = Depends(current_user), db: Session = Depends(get_session)):
     sess = _own_session(db, user, sid)
     if sid not in engine.sessions and sess.status == "running":  # orphan row (e.g. restore failed)
         sess.status = "stopped"
@@ -116,7 +124,7 @@ def sessions(user: User = Depends(current_user), db: Session = Depends(get_sessi
 
 
 @router.get("/orders")
-def orders(user: User = Depends(current_user), db: Session = Depends(get_session), session_id: Optional[int] = None):
+def orders(user: User = Depends(current_user), db: Session = Depends(get_session), session_id: Optional[int] = Query(None, ge=1, le=MAX_DB_ID)):
     q = select(OrderLog).where(OrderLog.user_id == user.id)
     if session_id:
         q = q.where(OrderLog.session_id == session_id)
